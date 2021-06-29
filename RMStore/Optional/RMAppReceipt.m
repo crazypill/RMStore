@@ -17,9 +17,15 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+#import "TargetConditionals.h"
+
+#if TARGET_OS_OSX
+#import <Cocoa/Cocoa.h>
+#else
+#import <UIKit/UIKit.h>
+#endif
 
 #import "RMAppReceipt.h"
-#import <UIKit/UIKit.h>
 #import <openssl/pkcs7.h>
 #import <openssl/objects.h>
 #import <openssl/sha.h>
@@ -179,6 +185,7 @@ static NSURL *_appleRootCertificateURL = nil;
 
 - (BOOL)verifyReceiptHash
 {
+#if !TARGET_OS_OSX
     // TODO: Getting the uuid in Mac is different. See: https://developer.apple.com/library/ios/releasenotes/General/ValidateAppStoreReceipt/Chapters/ValidateLocally.html#//apple_ref/doc/uid/TP40010573-CH1-SW5
     NSUUID *uuid = [UIDevice currentDevice].identifierForVendor;
     unsigned char uuidBytes[16];
@@ -194,7 +201,22 @@ static NSURL *_appleRootCertificateURL = nil;
     SHA1((const uint8_t*)data.bytes, data.length, (uint8_t*)expectedHash.mutableBytes); // Explicit casting to avoid errors when compiling as Objective-C++
     
     return [expectedHash isEqualToData:self.receiptHash];
+#else
+    return true;
+#endif
 }
+
+
++ (RMAppReceipt*)receiptWithBase64Text:(NSString*)base64encoded
+{
+    NSData* data = [RMAppReceipt dataFromBase64PCKS7Text:base64encoded];
+    if( !data )
+        return nil;
+    
+    RMAppReceipt* receipt = [[RMAppReceipt alloc] initWithASN1Data:data];
+    return receipt;
+}
+
 
 + (RMAppReceipt*)bundleReceipt
 {
@@ -210,12 +232,59 @@ static NSURL *_appleRootCertificateURL = nil;
     return receipt;
 }
 
+
 + (void)setAppleRootCertificateURL:(NSURL*)url
 {
     _appleRootCertificateURL = url;
 }
 
 #pragma mark - Utils
+
+
++ (NSData*)dataFromBase64PCKS7Text:(NSString*)base64EncodedData
+{
+    // decode data and put it on disk in tmp
+    NSData* decodedReceipt = [[NSData alloc] initWithBase64EncodedString:base64EncodedData options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    if( !decodedReceipt )
+        return nil;
+    
+    NSURL* tmpDirURL = [NSURL fileURLWithPath:NSTemporaryDirectory() isDirectory:YES];
+    NSURL* fileURL = [tmpDirURL URLByAppendingPathComponent:@"pkcs7data"] ;
+    
+    BOOL ok = [decodedReceipt writeToURL:fileURL atomically:NO];
+    if( !ok )
+        return nil;
+    
+    FILE* fp = fopen( fileURL.fileSystemRepresentation, "rb" );
+    if( !fp )
+    {
+        unlink( fileURL.fileSystemRepresentation );
+        return nil;
+    }
+    
+    PKCS7* p7 = d2i_PKCS7_fp( fp, NULL );
+    fclose( fp );
+    unlink( fileURL.fileSystemRepresentation );
+    
+    if( !p7 )
+        return nil;
+    
+    NSData* data;
+    NSURL* certificateURL = _appleRootCertificateURL ? : [[NSBundle mainBundle] URLForResource:@"AppleIncRootCertificate" withExtension:@"cer"];
+    NSData* certificateData = [NSData dataWithContentsOfURL:certificateURL];
+    if (!certificateData || [self verifyPCKS7:p7 withCertificateData:certificateData])
+    {
+        struct pkcs7_st *contents = p7->d.sign->contents;
+        if (PKCS7_type_is_data(contents))
+        {
+            ASN1_OCTET_STRING *octets = contents->d.data;
+            data = [NSData dataWithBytes:octets->data length:octets->length];
+        }
+    }
+    PKCS7_free(p7);
+    return data;
+}
+
 
 + (NSData*)dataFromPCKS7Path:(NSString*)path
 {
