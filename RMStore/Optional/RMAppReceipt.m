@@ -31,6 +31,13 @@
 #import <openssl/sha.h>
 #import <openssl/x509.h>
 
+
+// turn this on to verify that the receipt matches the apple root certificate - we have this off so we can decode debug and release receipts
+// this is only used in the license tool, not in the ProRemote iOS code (which is keyed to DEBUG define instead)...
+//#define VERIFY_RECEIPT
+
+
+
 // From https://developer.apple.com/library/ios/releasenotes/General/ValidateAppStoreReceipt/Chapters/ReceiptFields.html#//apple_ref/doc/uid/TP40010573-CH106-SW1
 NSInteger const RMAppReceiptASN1TypeBundleIdentifier = 2;
 NSInteger const RMAppReceiptASN1TypeAppVersion = 3;
@@ -49,6 +56,10 @@ NSInteger const RMAppReceiptASN1TypeOriginalPurchaseDate = 1706;
 NSInteger const RMAppReceiptASN1TypeSubscriptionExpirationDate = 1708;
 NSInteger const RMAppReceiptASN1TypeWebOrderLineItemID = 1711;
 NSInteger const RMAppReceiptASN1TypeCancellationDate = 1712;
+
+static NSURL *_appleRootCertificateURL = nil;
+
+
 
 #pragma mark - ANS1
 
@@ -69,6 +80,7 @@ static int RMASN1ReadInteger(const uint8_t **pp, long omax)
     return value;
 }
 
+
 static NSData* RMASN1ReadOctectString(const uint8_t **pp, long omax)
 {
     int tag, asn1Class;
@@ -82,6 +94,7 @@ static NSData* RMASN1ReadOctectString(const uint8_t **pp, long omax)
     *pp += length;
     return data;
 }
+
 
 static NSString* RMASN1ReadString(const uint8_t **pp, long omax, int expectedTag, NSStringEncoding encoding)
 {
@@ -97,17 +110,20 @@ static NSString* RMASN1ReadString(const uint8_t **pp, long omax, int expectedTag
     return value;
 }
 
+
 static NSString* RMASN1ReadUTF8String(const uint8_t **pp, long omax)
 {
     return RMASN1ReadString(pp, omax, V_ASN1_UTF8STRING, NSUTF8StringEncoding);
 }
+
 
 static NSString* RMASN1ReadIA5SString(const uint8_t **pp, long omax)
 {
     return RMASN1ReadString(pp, omax, V_ASN1_IA5STRING, NSASCIIStringEncoding);
 }
 
-static NSURL *_appleRootCertificateURL = nil;
+
+
 
 @implementation RMAppReceipt
 
@@ -157,24 +173,28 @@ static NSURL *_appleRootCertificateURL = nil;
     return self;
 }
 
+
 - (BOOL)containsInAppPurchaseOfProductIdentifier:(NSString*)productIdentifier
 {
-    for (RMAppReceiptIAP *purchase in _inAppPurchases)
+    for( RMAppReceiptIAP *purchase in _inAppPurchases )
     {
-        if ([purchase.productIdentifier isEqualToString:productIdentifier]) return YES;
+        if( [purchase.productIdentifier isEqualToString:productIdentifier] )
+            return YES;
     }
     return NO;
 }
+
 
 -(BOOL)containsActiveAutoRenewableSubscriptionOfProductIdentifier:(NSString *)productIdentifier forDate:(NSDate *)date
 {
     RMAppReceiptIAP *lastTransaction = nil;
     
-    for (RMAppReceiptIAP *iap in self.inAppPurchases)
+    for( RMAppReceiptIAP *iap in self.inAppPurchases )
     {
-        if (![iap.productIdentifier isEqualToString:productIdentifier]) continue;
+        if( ![iap.productIdentifier isEqualToString:productIdentifier] )
+            continue;
         
-        if (!lastTransaction || [iap.subscriptionExpirationDate compare:lastTransaction.subscriptionExpirationDate] == NSOrderedDescending)
+        if( !lastTransaction || [iap.subscriptionExpirationDate compare:lastTransaction.subscriptionExpirationDate] == NSOrderedDescending )
         {
             lastTransaction = iap;
         }
@@ -182,6 +202,7 @@ static NSURL *_appleRootCertificateURL = nil;
     
     return [lastTransaction isActiveAutoRenewableSubscriptionForDate:date];
 }
+
 
 - (BOOL)verifyReceiptHash
 {
@@ -238,6 +259,7 @@ static NSURL *_appleRootCertificateURL = nil;
     _appleRootCertificateURL = url;
 }
 
+
 #pragma mark - Utils
 
 
@@ -270,9 +292,12 @@ static NSURL *_appleRootCertificateURL = nil;
         return nil;
     
     NSData* data;
+
+#ifdef VERIFY_RECEIPT
     NSURL* certificateURL = _appleRootCertificateURL ? : [[NSBundle mainBundle] URLForResource:@"AppleIncRootCertificate" withExtension:@"cer"];
     NSData* certificateData = [NSData dataWithContentsOfURL:certificateURL];
     if (!certificateData || [self verifyPCKS7:p7 withCertificateData:certificateData])
+#endif
     {
         struct pkcs7_st *contents = p7->d.sign->contents;
         if (PKCS7_type_is_data(contents))
@@ -315,6 +340,7 @@ static NSURL *_appleRootCertificateURL = nil;
     return data;
 }
 
+
 + (BOOL)verifyPCKS7:(PKCS7*)container withCertificateData:(NSData*)certificateData
 { // Based on: https://developer.apple.com/library/ios/releasenotes/General/ValidateAppStoreReceipt/Chapters/ValidateLocally.html#//apple_ref/doc/uid/TP40010573-CH1-SW17
     static int verified = 1;
@@ -341,6 +367,7 @@ static NSURL *_appleRootCertificateURL = nil;
     
     return result == verified;
 }
+
 
 /*
  Based on https://github.com/rmaddy/VerifyStoreReceiptiOS
@@ -379,6 +406,7 @@ static NSURL *_appleRootCertificateURL = nil;
     }
 }
 
+
 + (NSDate*)formatRFC3339String:(NSString*)string
 {
     static NSDateFormatter *formatter;
@@ -393,6 +421,8 @@ static NSURL *_appleRootCertificateURL = nil;
 }
 
 @end
+
+
 
 @implementation RMAppReceiptIAP
 
@@ -450,6 +480,7 @@ static NSURL *_appleRootCertificateURL = nil;
     }
     return self;
 }
+
 
 - (BOOL)isActiveAutoRenewableSubscriptionForDate:(NSDate*)date
 {
